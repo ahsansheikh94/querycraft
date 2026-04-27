@@ -24,7 +24,6 @@ if [ ! -f ".env" ]; then
     cp env.example .env
     echo "⚠️  Please edit .env file with your configuration before running the application."
     echo "   Required: MONGODB_URI, SECRET_KEY, JWT_SECRET_KEY, OPENAI_API_KEY"
-    exit 1
 fi
 
 # Check if MongoDB is running (optional)
