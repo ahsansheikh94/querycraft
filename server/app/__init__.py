@@ -27,8 +27,14 @@ def create_app(config_class=Config):
     # Initialize JWT
     jwt = JWTManager(app)
     
-    # Initialize CORS
-    CORS(app, origins=app.config.get('CORS_ORIGINS', ['*']))
+    # Initialize CORS with proper configuration
+    CORS(app, 
+         resources={r"/api/*": {"origins": app.config.get('CORS_ORIGINS', ['*'])}},
+         supports_credentials=True,
+         allow_headers=['Content-Type', 'Authorization', 'X-Requested-With'],
+         methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+         expose_headers=['Content-Type', 'Authorization']
+    )
     
     # Initialize rate limiter
     limiter = Limiter(
