@@ -1,11 +1,32 @@
 import openai
 import logging
+import re
 from typing import List, Dict, Optional
 from ..models.schema import Schema
 from ..models.query import Query
 import json
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_markdown_sql_fence(text: str) -> str:
+    """Remove common ```sql / ``` wrappers from model output."""
+    if not text:
+        return text
+    text = text.strip()
+    fence = re.match(r"^```(?:sql)?\s*\n?(.*)\n?```\s*$", text, re.DOTALL | re.IGNORECASE)
+    if fence:
+        return fence.group(1).strip()
+    return text
+
+
+def _completion_message_text(response) -> str:
+    """Return assistant message text or raise ValueError if missing."""
+    msg = response.choices[0].message if response.choices else None
+    raw = getattr(msg, "content", None) if msg else None
+    if raw is None or not str(raw).strip():
+        raise ValueError("Language model returned no text")
+    return str(raw).strip()
 
 class OpenAIService:
     """Service for OpenAI API integration"""
@@ -44,8 +65,11 @@ class OpenAIService:
                 max_tokens=1000
             )
             
-            # Parse response
-            sql_query = response.choices[0].message.content.strip()
+            # Parse response (content can be None for refusals / some model paths)
+            raw_text = _completion_message_text(response)
+            sql_query = _strip_markdown_sql_fence(raw_text)
+            if not sql_query:
+                raise ValueError("Language model returned empty SQL text")
             
             # Generate explanation
             explanation = self._generate_explanation(user_input, sql_query, schema_context)
@@ -137,8 +161,8 @@ Keep the explanation simple and easy to understand for non-technical users.
                 max_tokens=300
             )
             
-            return response.choices[0].message.content.strip()
-            
+            return _completion_message_text(response)
+
         except Exception as e:
             logger.error(f"Error generating explanation: {e}")
             return "Explanation could not be generated."
@@ -185,8 +209,8 @@ Make the explanation comprehensive but easy to understand.
                 max_tokens=500
             )
             
-            return response.choices[0].message.content.strip()
-            
+            return _completion_message_text(response)
+
         except Exception as e:
             logger.error(f"Error explaining query: {e}")
             raise e
@@ -225,7 +249,7 @@ Provide specific, actionable suggestions. Return as a JSON array of strings.
                 max_tokens=400
             )
             
-            suggestions_text = response.choices[0].message.content.strip()
+            suggestions_text = _completion_message_text(response)
             
             # Try to parse as JSON, fallback to simple list
             try:

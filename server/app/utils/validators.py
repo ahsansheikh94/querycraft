@@ -64,20 +64,38 @@ def validate_schema_json(schema_data):
         raise ValidationError(f"Invalid schema format: {str(e)}")
 
 def validate_sql_query(query):
-    """Basic SQL injection prevention validation"""
-    # List of potentially dangerous SQL keywords
-    dangerous_keywords = [
-        'DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'CREATE', 'INSERT', 'UPDATE',
-        'EXEC', 'EXECUTE', 'EXECUTE IMMEDIATE', 'UNION', 'UNION ALL',
-        'INFORMATION_SCHEMA', 'SYSTEM', 'SYS', 'DUAL'
+    """Basic SQL injection prevention validation.
+
+    Uses whole-word / phrase regex matching so identifiers like CREATED_AT do not
+    falsely match dangerous substrings such as CREATE or UPDATE.
+    """
+    if not isinstance(query, str):
+        raise ValidationError("Invalid SQL query")
+
+    # Longer phrases first so e.g. UNION ALL is classified before UNION.
+    dangerous_patterns = [
+        (r'\bEXECUTE\s+IMMEDIATE\b', 'EXECUTE IMMEDIATE'),
+        (r'\bUNION\s+ALL\b', 'UNION ALL'),
+        (r'\bINFORMATION_SCHEMA\b', 'INFORMATION_SCHEMA'),
+        (r'\bDROP\b', 'DROP'),
+        (r'\bDELETE\b', 'DELETE'),
+        (r'\bTRUNCATE\b', 'TRUNCATE'),
+        (r'\bALTER\b', 'ALTER'),
+        (r'\bCREATE\b', 'CREATE'),
+        (r'\bINSERT\b', 'INSERT'),
+        (r'\bUPDATE\b', 'UPDATE'),
+        (r'\bEXEC\b', 'EXEC'),
+        (r'\bEXECUTE\b', 'EXECUTE'),
+        (r'\bUNION\b', 'UNION'),
+        (r'\bSYSTEM\b', 'SYSTEM'),
+        (r'\bSYS\b', 'SYS'),
+        (r'\bDUAL\b', 'DUAL'),
     ]
-    
-    query_upper = query.upper()
-    
-    for keyword in dangerous_keywords:
-        if keyword in query_upper:
-            raise ValidationError(f"Query contains potentially dangerous keyword: {keyword}")
-    
+
+    for pattern, label in dangerous_patterns:
+        if re.search(pattern, query, re.IGNORECASE):
+            raise ValidationError(f"Query contains potentially dangerous keyword: {label}")
+
     return True
 
 def validate_email_format(email):

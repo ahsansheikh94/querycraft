@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from marshmallow import ValidationError
+from openai import APIError
 import logging
 
 from ..models.project import Project
@@ -32,10 +33,19 @@ def generate_query(project_id):
         # Validate input
         schema = QueryInputSchema()
         data = schema.load(request.get_json())
-        
+
+        api_key = current_app.config.get('OPENAI_API_KEY')
+        if not api_key:
+            logger.warning('Generate query called but OPENAI_API_KEY is not set')
+            return jsonify({
+                'success': False,
+                'message': 'OpenAI API key is not configured',
+                'errors': ['Set OPENAI_API_KEY in the server environment to enable SQL generation'],
+            }), 503
+
         # Initialize OpenAI service
-        openai_service = OpenAIService(current_app.config['OPENAI_API_KEY'])
-        
+        openai_service = OpenAIService(api_key)
+
         # Generate SQL query
         result = openai_service.generate_sql_query(data['user_input'], project_id)
         
@@ -71,9 +81,17 @@ def generate_query(project_id):
             'message': str(e),
             'errors': [str(e)]
         }), 400
-        
+
+    except APIError as e:
+        logger.error(f'Generate query OpenAI API error: {e}', exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': 'Language model request failed',
+            'errors': [str(e)],
+        }), 502
+
     except Exception as e:
-        logger.error(f"Generate query error: {e}")
+        logger.error(f"Generate query error: {e}", exc_info=True)
         return jsonify({
             'success': False,
             'message': 'Internal server error',

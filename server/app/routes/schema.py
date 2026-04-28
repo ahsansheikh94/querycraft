@@ -14,7 +14,7 @@ schema_bp = Blueprint('schema', __name__)
 @schema_bp.route('/<project_id>/schema', methods=['POST'])
 @jwt_required()
 def create_schema(project_id):
-    """Create or update schemas for a project"""
+    """Create or merge schemas for a project (add/update tables without removing others)"""
     try:
         # Get user ID from JWT token
         user_id = get_jwt_identity()
@@ -32,20 +32,20 @@ def create_schema(project_id):
         schema = SchemaInputSchema()
         data = schema.load(request.get_json())
         
-        # Bulk save schemas
+        # Bulk save: merge into existing project schemas (does not remove other tables)
         schema_ids = Schema.bulk_save_schemas(project_id, data['schemas'])
-        
+
         # Get updated schemas
         schemas = Schema.find_by_project(project_id)
         schemas_data = [schema.get_public_data() for schema in schemas]
-        
+
         return jsonify({
             'success': True,
             'data': {
                 'schemas': schemas_data,
                 'schema_count': len(schemas_data)
             },
-            'message': f'Schemas created successfully for {len(schemas_data)} tables'
+            'message': f'Schemas created successfully for {len(data["schemas"])} table(s)'
         }), 201
         
     except ValidationError as e:
@@ -114,7 +114,7 @@ def get_schemas(project_id):
 @schema_bp.route('/<project_id>/schema', methods=['PUT'])
 @jwt_required()
 def update_schemas(project_id):
-    """Update schemas for a project (replaces all existing schemas)"""
+    """Update schemas for a project (merges by table name; other tables unchanged)"""
     try:
         # Get user ID from JWT token
         user_id = get_jwt_identity()
@@ -132,7 +132,7 @@ def update_schemas(project_id):
         schema = SchemaInputSchema()
         data = schema.load(request.get_json())
         
-        # Bulk save schemas (this replaces all existing schemas)
+        # Bulk save: merge into existing schemas (does not remove other tables)
         schema_ids = Schema.bulk_save_schemas(project_id, data['schemas'])
         
         # Get updated schemas

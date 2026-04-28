@@ -130,32 +130,66 @@ class Schema:
         }
     
     @classmethod
-    def bulk_save_schemas(cls, project_id, schemas_data):
-        """Bulk save multiple schemas for a project"""
+    def bulk_save_schemas(cls, project_id, schemas_data, replace_all=False):
+        """Bulk save multiple schemas for a project.
+
+        By default (replace_all=False), each table in the payload is inserted or
+        updated by table name; other tables on the project are left unchanged.
+
+        When replace_all=True, all existing schemas for the project are removed
+        and replaced by exactly the payload (full sync semantics).
+        """
         collection = get_collection('schemas')
-        
+
         # Validate all schemas first
         for schema_data in schemas_data:
             validate_schema_json(schema_data['table_schema'])
-        
-        # Delete existing schemas for this project
-        collection.delete_many({'project_id': project_id})
-        
-        # Insert new schemas
-        schemas_to_insert = []
+
+        table_names = [item['table_name'] for item in schemas_data]
+        if len(table_names) != len(set(table_names)):
+            raise ValueError('Duplicate table names in request')
+
+        if replace_all:
+            collection.delete_many({'project_id': project_id})
+            schemas_to_insert = []
+            for schema_data in schemas_data:
+                schema = cls(
+                    project_id=project_id,
+                    table_name=schema_data['table_name'],
+                    table_schema=schema_data['table_schema']
+                )
+                schemas_to_insert.append(schema.to_dict())
+
+            if schemas_to_insert:
+                result = collection.insert_many(schemas_to_insert)
+                return [str(oid) for oid in result.inserted_ids]
+            return []
+
+        # Merge: upsert each table in the payload without removing other tables
+        result_ids = []
         for schema_data in schemas_data:
+            existing = collection.find_one({
+                'project_id': project_id,
+                'table_name': schema_data['table_name']
+            })
             schema = cls(
                 project_id=project_id,
                 table_name=schema_data['table_name'],
                 table_schema=schema_data['table_schema']
             )
-            schemas_to_insert.append(schema.to_dict())
-        
-        if schemas_to_insert:
-            result = collection.insert_many(schemas_to_insert)
-            return [str(id) for id in result.inserted_ids]
-        
-        return []
+            if existing:
+                schema._id = existing['_id']
+                schema.created_at = existing.get('created_at')
+                collection.update_one(
+                    {'_id': existing['_id']},
+                    {'$set': schema.to_dict()}
+                )
+                result_ids.append(str(existing['_id']))
+            else:
+                result = collection.insert_one(schema.to_dict())
+                result_ids.append(str(result.inserted_id))
+
+        return result_ids
     
     @classmethod
     def get_schema_summary(cls, project_id):
