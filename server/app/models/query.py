@@ -6,8 +6,9 @@ from ..utils.validators import validate_sql_query
 class Query:
     """Query model for MongoDB"""
     
-    def __init__(self, project_id, user_input, generated_sql, explanation=None, _id=None, created_at=None):
+    def __init__(self, project_id, user_input, generated_sql, explanation=None, _id=None, created_at=None, user_id=None):
         self.project_id = project_id
+        self.user_id = user_id
         self.user_input = user_input
         self.generated_sql = generated_sql
         self.explanation = explanation
@@ -18,6 +19,7 @@ class Query:
         """Convert query to dictionary"""
         return {
             'project_id': self.project_id,
+            'user_id': self.user_id,
             'user_input': self.user_input,
             'generated_sql': self.generated_sql,
             'explanation': self.explanation,
@@ -29,6 +31,7 @@ class Query:
         """Create query from dictionary"""
         return cls(
             project_id=data.get('project_id'),
+            user_id=data.get('user_id'),
             user_input=data.get('user_input'),
             generated_sql=data.get('generated_sql'),
             explanation=data.get('explanation'),
@@ -61,20 +64,22 @@ class Query:
         return cls.from_dict(query_data) if query_data else None
     
     @classmethod
-    def find_by_project(cls, project_id, page=1, per_page=10):
+    def find_by_project(cls, project_id, page=1, per_page=10, user_id=None):
         """Find all queries for a project with pagination"""
         collection = get_collection('queries')
-        
+
         # Calculate skip value for pagination
         skip = (page - 1) * per_page
-        
+
+        mongo_query = {'project_id': project_id}
+        if user_id is not None:
+            mongo_query['user_id'] = user_id
+
         # Get total count
-        total = collection.count_documents({'project_id': project_id})
-        
+        total = collection.count_documents(mongo_query)
+
         # Get queries with pagination
-        queries_data = collection.find(
-            {'project_id': project_id}
-        ).sort('created_at', -1).skip(skip).limit(per_page)
+        queries_data = collection.find(mongo_query).sort('created_at', -1).skip(skip).limit(per_page)
         
         queries = [cls.from_dict(data) for data in queries_data]
         
@@ -87,13 +92,13 @@ class Query:
         }
     
     @classmethod
-    def search_queries(cls, project_id, search_term, page=1, per_page=10):
+    def search_queries(cls, project_id, search_term, page=1, per_page=10, user_id=None):
         """Search queries by user input or generated SQL"""
         collection = get_collection('queries')
-        
+
         # Calculate skip value for pagination
         skip = (page - 1) * per_page
-        
+
         # Create search query
         search_query = {
             'project_id': project_id,
@@ -103,6 +108,8 @@ class Query:
                 {'explanation': {'$regex': search_term, '$options': 'i'}}
             ]
         }
+        if user_id is not None:
+            search_query['user_id'] = user_id
         
         # Get total count
         total = collection.count_documents(search_query)

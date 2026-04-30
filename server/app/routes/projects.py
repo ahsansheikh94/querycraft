@@ -3,9 +3,17 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from marshmallow import ValidationError
 import logging
 
-from ..models.user import User
 from ..models.project import Project
 from ..utils.validators import ProjectSchema, PaginationSchema
+from ..data.builtin_catalog import (
+    builtin_project_count,
+    list_builtin_projects_with_stats,
+    try_get_builtin_project_public,
+    attach_stats,
+    get_builtin_project_stats,
+    is_builtin_project_id,
+    READONLY_MESSAGE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,30 +83,46 @@ def get_projects():
         schema = PaginationSchema()
         pagination_data = schema.load(request.args)
         
-        # Get projects with pagination
-        result = Project.find_by_user(
-            user_id=user_id,
-            page=pagination_data['page'],
-            per_page=pagination_data['per_page']
-        )
-        
-        # Get project statistics
-        projects_with_stats = []
-        for project in result['projects']:
+        page = pagination_data['page']
+        per_page = pagination_data['per_page']
+        B = builtin_project_count()
+        builtins_full = list_builtin_projects_with_stats()
+
+        start_global = (page - 1) * per_page
+        end_global = start_global + per_page
+
+        builtin_part = [
+            builtins_full[i]
+            for i in range(start_global, min(end_global, B))
+        ]
+
+        ua = max(0, start_global - B)
+        ub_exclusive = max(0, end_global - B)
+        user_limit = max(0, ub_exclusive - ua)
+
+        user_window = Project.find_by_user_offset(user_id, ua, user_limit)
+
+        combined = []
+        for item in builtin_part:
+            combined.append(item)
+        for project in user_window['projects']:
             project_data = project.get_public_data()
             stats = Project.get_project_stats(project_data['id'])
             project_data['stats'] = stats
-            projects_with_stats.append(project_data)
-        
+            combined.append(project_data)
+
+        total_display = B + user_window['total']
+        pages = (total_display + per_page - 1) // per_page if per_page else 0
+
         return jsonify({
             'success': True,
             'data': {
-                'projects': projects_with_stats,
+                'projects': combined,
                 'pagination': {
-                    'page': result['page'],
-                    'per_page': result['per_page'],
-                    'total': result['total'],
-                    'pages': result['pages']
+                    'page': page,
+                    'per_page': per_page,
+                    'total': total_display,
+                    'pages': pages
                 }
             },
             'message': 'Projects retrieved successfully'
@@ -127,17 +151,26 @@ def get_project(project_id):
         # Get user ID from JWT token
         user_id = get_jwt_identity()
         
-        # Find project
+        builtin = try_get_builtin_project_public(project_id)
+        if builtin:
+            project_data = attach_stats(builtin)
+            return jsonify({
+                'success': True,
+                'data': {
+                    'project': project_data
+                },
+                'message': 'Project retrieved successfully'
+            }), 200
+
         project = Project.find_by_id(project_id, user_id)
-        
+
         if not project:
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
-        # Get project statistics
+
         project_data = project.get_public_data()
         stats = Project.get_project_stats(project_id)
         project_data['stats'] = stats
@@ -166,20 +199,26 @@ def update_project(project_id):
         # Get user ID from JWT token
         user_id = get_jwt_identity()
         
-        # Find project
+        if is_builtin_project_id(project_id):
+            return jsonify({
+                'success': False,
+                'message': READONLY_MESSAGE,
+                'errors': [READONLY_MESSAGE],
+            }), 403
+
         project = Project.find_by_id(project_id, user_id)
-        
+
         if not project:
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
+
         # Validate input
         schema = ProjectSchema()
         data = schema.load(request.get_json())
-        
+
         # Update project
         project.update(
             name=data['name'],
@@ -224,16 +263,22 @@ def delete_project(project_id):
         # Get user ID from JWT token
         user_id = get_jwt_identity()
         
-        # Find project
+        if is_builtin_project_id(project_id):
+            return jsonify({
+                'success': False,
+                'message': READONLY_MESSAGE,
+                'errors': [READONLY_MESSAGE],
+            }), 403
+
         project = Project.find_by_id(project_id, user_id)
-        
+
         if not project:
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
+
         # Delete project (this will also delete associated schemas and queries)
         project.delete()
         
@@ -259,17 +304,26 @@ def get_project_stats(project_id):
         # Get user ID from JWT token
         user_id = get_jwt_identity()
         
-        # Find project
+        if is_builtin_project_id(project_id):
+            stats = get_builtin_project_stats(project_id)
+            return jsonify({
+                'success': True,
+                'data': {
+                    'project_id': project_id,
+                    'stats': stats
+                },
+                'message': 'Project statistics retrieved successfully'
+            }), 200
+
         project = Project.find_by_id(project_id, user_id)
-        
+
         if not project:
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
-        # Get project statistics
+
         stats = Project.get_project_stats(project_id)
         
         return jsonify({

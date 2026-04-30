@@ -99,7 +99,23 @@ class Project:
             'per_page': per_page,
             'pages': (total + per_page - 1) // per_page
         }
-    
+
+    @classmethod
+    def find_by_user_offset(cls, user_id, skip, limit):
+        """Paginate user projects by skip/limit (sorted by updated_at desc)."""
+        collection = get_collection('projects')
+        total = collection.count_documents({'user_id': user_id})
+        if limit <= 0:
+            return {'projects': [], 'total': total}
+        projects_data = (
+            collection.find({'user_id': user_id})
+            .sort('updated_at', -1)
+            .skip(skip)
+            .limit(limit)
+        )
+        projects = [cls.from_dict(data) for data in projects_data]
+        return {'projects': projects, 'total': total}
+
     def update(self, **kwargs):
         """Update project fields"""
         collection = get_collection('projects')

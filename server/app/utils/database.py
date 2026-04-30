@@ -26,7 +26,9 @@ def init_db(app):
             maxIdleTimeMS=30000,
             serverSelectionTimeoutMS=5000,
             connectTimeoutMS=10000,
-            socketTimeoutMS=20000
+            socketTimeoutMS=20000,
+            tls=True,
+            tlsAllowInvalidCertificates=True
         )
         
         # Test connection

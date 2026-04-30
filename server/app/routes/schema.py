@@ -3,9 +3,17 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from marshmallow import ValidationError
 import logging
 
-from ..models.project import Project
 from ..models.schema import Schema
 from ..utils.validators import SchemaInputSchema
+from ..data.builtin_catalog import (
+    user_has_project_access,
+    is_builtin_project_id,
+    is_builtin_schema_id,
+    merged_schema_public_dicts,
+    merged_schema_summary,
+    find_schema_merged,
+    READONLY_MESSAGE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,25 +27,28 @@ def create_schema(project_id):
         # Get user ID from JWT token
         user_id = get_jwt_identity()
         
-        # Verify project ownership
-        project = Project.find_by_id(project_id, user_id)
-        if not project:
+        if is_builtin_project_id(project_id):
+            return jsonify({
+                'success': False,
+                'message': READONLY_MESSAGE,
+                'errors': [READONLY_MESSAGE],
+            }), 403
+
+        if not user_has_project_access(project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
+
         # Validate input
         schema = SchemaInputSchema()
         data = schema.load(request.get_json())
-        
-        # Bulk save: merge into existing project schemas (does not remove other tables)
-        schema_ids = Schema.bulk_save_schemas(project_id, data['schemas'])
 
-        # Get updated schemas
-        schemas = Schema.find_by_project(project_id)
-        schemas_data = [schema.get_public_data() for schema in schemas]
+        # Bulk save: merge into existing project schemas (does not remove other tables)
+        Schema.bulk_save_schemas(project_id, data['schemas'])
+
+        schemas_data = merged_schema_public_dicts(project_id)
 
         return jsonify({
             'success': True,
@@ -78,21 +89,15 @@ def get_schemas(project_id):
         # Get user ID from JWT token
         user_id = get_jwt_identity()
         
-        # Verify project ownership
-        project = Project.find_by_id(project_id, user_id)
-        if not project:
+        if not user_has_project_access(project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
-        # Get schemas
-        schemas = Schema.find_by_project(project_id)
-        schemas_data = [schema.get_public_data() for schema in schemas]
-        
-        # Get schema summary
-        summary = Schema.get_schema_summary(project_id)
+
+        schemas_data = merged_schema_public_dicts(project_id)
+        summary = merged_schema_summary(project_id)
         
         return jsonify({
             'success': True,
@@ -119,25 +124,27 @@ def update_schemas(project_id):
         # Get user ID from JWT token
         user_id = get_jwt_identity()
         
-        # Verify project ownership
-        project = Project.find_by_id(project_id, user_id)
-        if not project:
+        if is_builtin_project_id(project_id):
+            return jsonify({
+                'success': False,
+                'message': READONLY_MESSAGE,
+                'errors': [READONLY_MESSAGE],
+            }), 403
+
+        if not user_has_project_access(project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
+
         # Validate input
         schema = SchemaInputSchema()
         data = schema.load(request.get_json())
-        
-        # Bulk save: merge into existing schemas (does not remove other tables)
-        schema_ids = Schema.bulk_save_schemas(project_id, data['schemas'])
-        
-        # Get updated schemas
-        schemas = Schema.find_by_project(project_id)
-        schemas_data = [schema.get_public_data() for schema in schemas]
+
+        Schema.bulk_save_schemas(project_id, data['schemas'])
+
+        schemas_data = merged_schema_public_dicts(project_id)
         
         return jsonify({
             'success': True,
@@ -175,27 +182,23 @@ def update_schemas(project_id):
 def get_schema(project_id, schema_id):
     """Get a specific schema by ID"""
     try:
-        # Get user ID from JWT token
         user_id = get_jwt_identity()
-        
-        # Verify project ownership
-        project = Project.find_by_id(project_id, user_id)
-        if not project:
+
+        if not user_has_project_access(project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
-        # Get schema
-        schema = Schema.find_by_id(schema_id, project_id)
+
+        schema = find_schema_merged(schema_id, project_id)
         if not schema:
             return jsonify({
                 'success': False,
                 'message': 'Schema not found',
                 'errors': ['Schema not found']
             }), 404
-        
+
         return jsonify({
             'success': True,
             'data': {
@@ -220,24 +223,28 @@ def update_schema(project_id, schema_id):
         # Get user ID from JWT token
         user_id = get_jwt_identity()
         
-        # Verify project ownership
-        project = Project.find_by_id(project_id, user_id)
-        if not project:
+        if not user_has_project_access(project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
-        # Get schema
-        schema = Schema.find_by_id(schema_id, project_id)
+
+        schema = find_schema_merged(schema_id, project_id)
         if not schema:
             return jsonify({
                 'success': False,
                 'message': 'Schema not found',
                 'errors': ['Schema not found']
             }), 404
-        
+
+        if is_builtin_schema_id(schema_id):
+            return jsonify({
+                'success': False,
+                'message': READONLY_MESSAGE,
+                'errors': [READONLY_MESSAGE],
+            }), 403
+
         # Get update data
         data = request.get_json()
         
@@ -282,25 +289,28 @@ def delete_schema(project_id, schema_id):
         # Get user ID from JWT token
         user_id = get_jwt_identity()
         
-        # Verify project ownership
-        project = Project.find_by_id(project_id, user_id)
-        if not project:
+        if not user_has_project_access(project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
-        # Get schema
-        schema = Schema.find_by_id(schema_id, project_id)
+
+        schema = find_schema_merged(schema_id, project_id)
         if not schema:
             return jsonify({
                 'success': False,
                 'message': 'Schema not found',
                 'errors': ['Schema not found']
             }), 404
-        
-        # Delete schema
+
+        if is_builtin_schema_id(schema_id):
+            return jsonify({
+                'success': False,
+                'message': READONLY_MESSAGE,
+                'errors': [READONLY_MESSAGE],
+            }), 403
+
         schema.delete()
         
         return jsonify({
@@ -325,17 +335,14 @@ def get_schema_summary(project_id):
         # Get user ID from JWT token
         user_id = get_jwt_identity()
         
-        # Verify project ownership
-        project = Project.find_by_id(project_id, user_id)
-        if not project:
+        if not user_has_project_access(project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
-        # Get schema summary
-        summary = Schema.get_schema_summary(project_id)
+
+        summary = merged_schema_summary(project_id)
         
         return jsonify({
             'success': True,

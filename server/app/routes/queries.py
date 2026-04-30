@@ -1,11 +1,13 @@
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from marshmallow import ValidationError
+from dotenv import load_dotenv
 from openai import APIError
 import logging
+import os
 
-from ..models.project import Project
 from ..models.query import Query
+from ..data.builtin_catalog import user_has_project_access, is_builtin_project_id
 from ..services.openai_service import OpenAIService
 from ..utils.validators import QueryInputSchema, PaginationSchema
 
@@ -18,23 +20,22 @@ queries_bp = Blueprint('queries', __name__)
 def generate_query(project_id):
     """Generate SQL query from natural language input"""
     try:
+        load_dotenv() 
         # Get user ID from JWT token
         user_id = get_jwt_identity()
         
-        # Verify project ownership
-        project = Project.find_by_id(project_id, user_id)
-        if not project:
+        if not user_has_project_access(project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
+
         # Validate input
         schema = QueryInputSchema()
         data = schema.load(request.get_json())
 
-        api_key = current_app.config.get('OPENAI_API_KEY')
+        api_key = os.environ.get('OPENAI_API_KEY')
         if not api_key:
             logger.warning('Generate query called but OPENAI_API_KEY is not set')
             return jsonify({
@@ -46,18 +47,17 @@ def generate_query(project_id):
         # Initialize OpenAI service
         openai_service = OpenAIService(api_key)
 
-        # Generate SQL query
         result = openai_service.generate_sql_query(data['user_input'], project_id)
-        
-        # Save query to database
+
         query = Query(
             project_id=project_id,
+            user_id=user_id,
             user_input=data['user_input'],
             generated_sql=result['sql_query'],
             explanation=result['explanation']
         )
         query.save()
-        
+
         return jsonify({
             'success': True,
             'data': {
@@ -106,15 +106,13 @@ def get_queries(project_id):
         # Get user ID from JWT token
         user_id = get_jwt_identity()
         
-        # Verify project ownership
-        project = Project.find_by_id(project_id, user_id)
-        if not project:
+        if not user_has_project_access(project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
+
         # Get pagination parameters
         schema = PaginationSchema()
         pagination_data = schema.load(request.args)
@@ -122,20 +120,24 @@ def get_queries(project_id):
         # Get search term if provided
         search_term = request.args.get('search', '')
         
+        builtin_user_filter = user_id if is_builtin_project_id(project_id) else None
+
         if search_term:
             # Search queries
             result = Query.search_queries(
                 project_id=project_id,
                 search_term=search_term,
                 page=pagination_data['page'],
-                per_page=pagination_data['per_page']
+                per_page=pagination_data['per_page'],
+                user_id=builtin_user_filter
             )
         else:
             # Get all queries
             result = Query.find_by_project(
                 project_id=project_id,
                 page=pagination_data['page'],
-                per_page=pagination_data['per_page']
+                per_page=pagination_data['per_page'],
+                user_id=builtin_user_filter
             )
         
         # Convert queries to public data
@@ -192,15 +194,13 @@ def get_query(query_id):
                 'errors': ['Query not found']
             }), 404
         
-        # Verify project ownership
-        project = Project.find_by_id(query.project_id, user_id)
-        if not project:
+        if not user_has_project_access(query.project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Access denied',
                 'errors': ['You do not have access to this query']
             }), 403
-        
+
         return jsonify({
             'success': True,
             'data': {
@@ -208,7 +208,7 @@ def get_query(query_id):
             },
             'message': 'Query retrieved successfully'
         }), 200
-        
+
     except Exception as e:
         logger.error(f"Get query error: {e}")
         return jsonify({
@@ -235,14 +235,13 @@ def explain_query(query_id):
             }), 404
         
         # Verify project ownership
-        project = Project.find_by_id(query.project_id, user_id)
-        if not project:
+        if not user_has_project_access(query.project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Access denied',
                 'errors': ['You do not have access to this query']
             }), 403
-        
+
         # Initialize OpenAI service
         openai_service = OpenAIService(current_app.config['OPENAI_API_KEY'])
         
@@ -284,14 +283,13 @@ def suggest_improvements(query_id):
             }), 404
         
         # Verify project ownership
-        project = Project.find_by_id(query.project_id, user_id)
-        if not project:
+        if not user_has_project_access(query.project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Access denied',
                 'errors': ['You do not have access to this query']
             }), 403
-        
+
         # Initialize OpenAI service
         openai_service = OpenAIService(current_app.config['OPENAI_API_KEY'])
         
@@ -332,16 +330,13 @@ def delete_query(query_id):
                 'errors': ['Query not found']
             }), 404
         
-        # Verify project ownership
-        project = Project.find_by_id(query.project_id, user_id)
-        if not project:
+        if not user_has_project_access(query.project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Access denied',
                 'errors': ['You do not have access to this query']
             }), 403
-        
-        # Delete query
+
         query.delete()
         
         return jsonify({
@@ -366,16 +361,13 @@ def get_query_stats(project_id):
         # Get user ID from JWT token
         user_id = get_jwt_identity()
         
-        # Verify project ownership
-        project = Project.find_by_id(project_id, user_id)
-        if not project:
+        if not user_has_project_access(project_id, user_id):
             return jsonify({
                 'success': False,
                 'message': 'Project not found',
                 'errors': ['Project not found or access denied']
             }), 404
-        
-        # Get query statistics
+
         stats = Query.get_query_stats(project_id)
         
         # Get recent queries

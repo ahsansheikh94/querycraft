@@ -4,6 +4,7 @@ import re
 from typing import List, Dict, Optional
 from ..models.schema import Schema
 from ..models.query import Query
+from ..data.builtin_catalog import merged_schema_instances
 import json
 
 logger = logging.getLogger(__name__)
@@ -42,9 +43,8 @@ class OpenAIService:
     def generate_sql_query(self, user_input: str, project_id: str) -> Dict:
         """Generate SQL query from natural language input"""
         try:
-            # Get project schemas
-            schemas = Schema.find_by_project(project_id)
-            
+            schemas = merged_schema_instances(project_id)
+
             if not schemas:
                 raise ValueError("No schemas found for this project")
             
@@ -175,10 +175,9 @@ Keep the explanation simple and easy to understand for non-technical users.
             if not query:
                 raise ValueError("Query not found")
             
-            # Get project schemas
-            schemas = Schema.find_by_project(project_id)
+            schemas = merged_schema_instances(project_id)
             schema_context = self._format_schemas_for_ai(schemas)
-            
+
             # Generate detailed explanation
             prompt = f"""
 SQL Query:
@@ -218,10 +217,9 @@ Make the explanation comprehensive but easy to understand.
     def suggest_improvements(self, sql_query: str, project_id: str) -> List[str]:
         """Suggest improvements for a SQL query"""
         try:
-            # Get project schemas
-            schemas = Schema.find_by_project(project_id)
+            schemas = merged_schema_instances(project_id)
             schema_context = self._format_schemas_for_ai(schemas)
-            
+
             prompt = f"""
 SQL Query:
 {sql_query}
